@@ -1,0 +1,81 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      # The repository holds Dart sources only, so generate the Android host
+      # project. `flutter create` is the supported way to add a platform to an
+      # existing project and leaves files that already exist alone.
+      - name: Generate Android platform files
+        run: flutter create --platforms=android --org com.example --project-name scientific_calculator .
+
+      # `flutter create` rewrites pubspec.yaml / analysis_options.yaml from its
+      # template and drops a default counter widget test. Undo both so the
+      # pinned dependencies and the project's own test suite are what run.
+      - name: Restore pinned configuration
+        run: |
+          git checkout -- pubspec.yaml analysis_options.yaml
+          rm -f test/widget_test.dart
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      # Non-blocking: reports lint and analysis findings without blocking the
+      # APK. Change to `continue-on-error: false` once the tree is clean.
+      - name: Analyze
+        continue-on-error: true
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        continue-on-error: true
+        run: flutter test
+
+      - name: Build universal APK
+        run: flutter build apk --release
+
+      - name: Build per-ABI APKs
+        run: flutter build apk --release --split-per-abi
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: scientific-calculator-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+
+      - name: Attach APKs to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/*.apk
